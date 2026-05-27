@@ -4,7 +4,6 @@ import requests
 import pandas as pd
 import numpy as np
 import datetime
-from pandas_datareader import data as web
 from transformers import pipeline
 from sklearn.ensemble import RandomForestClassifier
 
@@ -71,8 +70,21 @@ if api_key:
             dati_yf = yf.download(list(tickers.values()), start=inizio, end=fine, progress=False)['Close']
             dati_yf = dati_yf.rename(columns={v: k for k, v in tickers.items()})
             
-            # Download Dati Macroeconomici PURI da FRED
-            df_macro = web.DataReader(['UNRATE', 'CPIAUCSL'], 'fred', inizio, fine)
+            # STRATEGIA DI BACKUP ESTREMA: Scarichiamo direttamente i CSV dai server della FED senza librerie rotte
+            try:
+                url_unrate = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE"
+                url_cpi = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=CPIAUCSL"
+                
+                df_unrate = pd.read_csv(url_unrate, parse_dates=['DATE'], index_col='DATE')
+                df_cpi = pd.read_csv(url_cpi, parse_dates=['DATE'], index_col='DATE')
+                
+                df_unrate['UNRATE'] = pd.to_numeric(df_unrate['UNRATE'], errors='coerce')
+                df_cpi['CPIAUCSL'] = pd.to_numeric(df_cpi['CPIAUCSL'], errors='coerce')
+                
+                df_macro = df_unrate.join(df_cpi, how='outer')
+            except Exception as e:
+                str.error(f"Errore download alternativo FRED: {e}")
+                df_macro = pd.DataFrame(columns=['UNRATE', 'CPIAUCSL'])
             
             # Unione e Forward-Filling
             df_totale = dati_yf.join(df_macro, how='left').ffill().dropna()
@@ -91,4 +103,84 @@ if api_key:
             
             # Mappatura NLP
             df_features['Politica Monetaria'] = -df_features['Variazione_Tassi10Y']
-            df_features
+            df_features['Dati Macroeconomici'] = df_features['Rendimento_S&P500']
+            df_features['Corporate & Innovazione'] = df_features['Performance_Tech']
+            df_features['Geopolitica & Crisi'] = -df_features['Variazione_VIX']
+            
+            df_features['Target'] = (df_features['Rendimento_S&P500'].shift(-1) > 0).astype(int)
+            df_features = df_features.dropna()
+            
+            # 3. MACHINE LEARNING MULTIVARIATO
+            lista_predittori = ['Politica Monetaria', 'Dati Macroeconomici', 'Corporate & Innovazione', 'Geopolitica & Crisi', 
+                                'Rendimento_Oro', 'Rendimento_Petrolio', 'Forza_Dollaro', 'Trend_Disoccupazione', 'Trend_Inflazione']
+            
+            X = df_features[lista_predittori]
+            y = df_features['Target']
+            
+            modello = RandomForestClassifier(n_estimators=300, max_depth=7, random_state=42)
+            modello.fit(X, y)
+            
+            ultimo_giorno = df_features.iloc[-1]
+            dati_oggi = pd.DataFrame([{
+                'Politica Monetaria': punteggi_oggi['Politica Monetaria'],
+                'Dati Macroeconomici': punteggi_oggi['Dati Macroeconomici'],
+                'Corporate & Innovazione': punteggi_oggi['Corporate & Innovazione'],
+                'Geopolitica & Crisi': punteggi_oggi['Geopolitica & Crisi'],
+                'Rendimento_Oro': ultimo_giorno['Rendimento_Oro'],
+                'Rendimento_Petrolio': ultimo_giorno['Rendimento_Petrolio'],
+                'Forza_Dollaro': ultimo_giorno['Forza_Dollaro'],
+                'Trend_Disoccupazione': ultimo_giorno['Trend_Disoccupazione'],
+                'Trend_Inflazione': ultimo_giorno['Trend_Inflazione']
+            }])
+            
+            previsione = modello.predict(dati_oggi)[0]
+            probabilita = modello.predict_proba(dati_oggi)[0][previsione] * 100
+            
+            testo_direzione = "RIALZO 📈" if previsione == 1 else "RIBASSO 📉"
+            
+            str.markdown("---")
+            str.header("🔮 VERDETTO DELL'INTELLIGENZA ARTIFICIALE MULTIVARIATA")
+            mc1, mc2 = str.columns(2)
+            mc1.metric("Proiezione Statistica Prossima Sessione", testo_direzione)
+            mc2.metric("Confidenza dell'Insieme Alberi", f"{probabilita:.1f}%")
+            
+            # 4. ENGINE DI BACKTESTING RIGOROSO (15 ANNI NETTI)
+            str.markdown("---")
+            str.header("📈 Validazione Storica della Strategia (Dal 2011 a Oggi)")
+            
+            df_features['Prob_Rialzo'] = modello.predict_proba(X)[:, 1]
+            
+            df_features['Volatilita_Attesa'] = df_features['Rendimento_S&P500'].rolling(15).std().fillna(0)
+            df_features['Segnale'] = np.where((df_features['Prob_Rialzo'] > soglia_confidenza) & (df_features['Volatilita_Attesa'] > (costo_fee * 2)), 1, 0)
+            
+            df_features['Rendimento_Mercato'] = df_features['Rendimento_S&P500'].shift(-1)
+            df_features['Rendimento_Strategia'] = df_features['Segnale'] * df_features['Rendimento_Mercato']
+            
+            df_features['Variazione_Posizione'] = df_features['Segnale'].diff().abs()
+            df_features.loc[df_features['Variazione_Posizione'] == 1, 'Rendimento_Strategia'] -= costo_fee
+            
+            capitale_iniziale = 10000
+            df_features['S&P 500 (Buy & Hold)'] = capitale_iniziale * (1 + df_features['Rendimento_Mercato']).cumprod()
+            df_features['Algoritmo Multivariato Netto'] = capitale_iniziale * (1 + df_features['Rendimento_Strategia']).cumprod()
+            
+            df_plot = df_features[['Algoritmo Multivariato Netto', 'S&P 500 (Buy & Hold)']].dropna()
+            
+            rend_b_h = ((df_plot['S&P 500 (Buy & Hold)'].iloc[-1] / capitale_iniziale) - 1) * 100
+            rend_ai = ((df_plot['Algoritmo Multivariato Netto'].iloc[-1] / capitale_iniziale) - 1) * 100
+            trade_totali = df_features['Variazione_Posizione'].sum() / 2
+            
+            rc1, rc2, rc3 = str.columns(3)
+            rc1.metric("Rendimento Storico Indice", f"{rend_b_h:.1f}%")
+            rc2.metric("Rendimento Netto Modello AI", f"{rend_ai:.1f}%", delta=f"{rend_ai - rend_b_h:.1f}% vs Benchmark")
+            rc3.metric("Operazioni Totali Eseguite", f"{int(trade_totali)}")
+            
+            str.line_chart(df_plot)
+            
+            # 5. IMPORTANZA DELLE VARIABILI
+            str.markdown("---")
+            str.subheader("📊 Analisi dell'Importanza dei Fattori (Feature Importance)")
+            importanza = pd.DataFrame({'Fattore': lista_predittori, 'Importanza': modello.feature_importances_})
+            importanza = importanza.sort_values(by='Importanza', ascending=False).set_index('Fattore')
+            str.bar_chart(importanza)
+else:
+    str.warning("Inserisci la chiave API nella barra laterale per sbloccare i predittori multivariati.")
