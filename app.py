@@ -115,16 +115,29 @@ if api_key:
             df_features['Target'] = (df_features['Rendimento_S&P500'].shift(-1) > 0).astype(int)
             df_features = df_features.dropna()
             
-            # 3. MACHINE LEARNING MULTIVARIATO
+            # ... (Tutto il codice precedente rimane uguale fino a df_features.dropna()) ...
+            
+            # 3. MACHINE LEARNING: TRAIN-TEST SPLIT CRONOLOGICO
             lista_predittori = ['Politica Monetaria', 'Dati Macroeconomici', 'Corporate & Innovazione', 'Geopolitica & Crisi', 
                                 'Rendimento_Oro', 'Rendimento_Petrolio', 'Forza_Dollaro', 'Trend_Disoccupazione', 'Trend_Inflazione']
             
             X = df_features[lista_predittori]
             y = df_features['Target']
             
-            modello = RandomForestClassifier(n_estimators=300, max_depth=7, random_state=42)
-            modello.fit(X, y)
+            # --- LA CORREZIONE QUANTITATIVA ---
+            # Dividiamo i dati: 80% Addestramento (Passato remoto) / 20% Test (Passato recente/Presente)
+            indice_taglio = int(len(df_features) * 0.8)
             
+            X_train = X.iloc[:indice_taglio]
+            y_train = y.iloc[:indice_taglio]
+            X_test = X.iloc[indice_taglio:]
+            y_test = y.iloc[indice_taglio:]
+            
+            # L'algoritmo studia SOLO il passato (X_train)
+            modello = RandomForestClassifier(n_estimators=300, max_depth=6, random_state=42)
+            modello.fit(X_train, y_train)
+            
+            # Previsione per domani basata sui dati di oggi
             ultimo_giorno = df_features.iloc[-1]
             dati_oggi = pd.DataFrame([{
                 'Politica Monetaria': punteggi_oggi['Politica Monetaria'],
@@ -149,36 +162,53 @@ if api_key:
             mc1.metric("Proiezione Statistica Prossima Sessione", testo_direzione)
             mc2.metric("Confidenza dell'Insieme Alberi", f"{probabilita:.1f}%")
             
-            # 4. ENGINE DI BACKTESTING RIGOROSO
+            # 4. ENGINE DI BACKTESTING OUT-OF-SAMPLE (SOLO DATI INVISIBILI)
             str.markdown("---")
-            str.header("📈 Validazione Storica della Strategia (Dal 2011 a Oggi)")
+            str.header("📈 Validazione Reale della Strategia (Test alla cieca su ultimi 3 anni)")
+            str.markdown("*Il modello sta operando su una porzione di mercato che non ha mai visto durante l'addestramento.*")
             
-            df_features['Prob_Rialzo'] = modello.predict_proba(X)[:, 1]
-            df_features['Volatilita_Attesa'] = df_features['Rendimento_S&P500'].rolling(15).std().fillna(0)
-            df_features['Segnale'] = np.where((df_features['Prob_Rialzo'] > soglia_confidenza) & (df_features['Volatilita_Attesa'] > (costo_fee * 2)), 1, 0)
+            # Creiamo un DataFrame dedicato solo al periodo di Test
+            df_test = df_features.iloc[indice_taglio:].copy()
             
-            df_features['Rendimento_Mercato'] = df_features['Rendimento_S&P500'].shift(-1)
-            df_features['Rendimento_Strategia'] = df_features['Segnale'] * df_features['Rendimento_Mercato']
+            # Il modello prova a indovinare i dati di test
+            df_test['Prob_Rialzo'] = modello.predict_proba(X_test)[:, 1]
+            df_test['Volatilita_Attesa'] = df_test['Rendimento_S&P500'].rolling(10).std().fillna(0)
             
-            df_features['Variazione_Posizione'] = df_features['Segnale'].diff().abs()
-            df_features.loc[df_features['Variazione_Posizione'] == 1, 'Rendimento_Strategia'] -= costo_fee
+            # Filtro di ingresso
+            df_test['Segnale'] = np.where((df_test['Prob_Rialzo'] > soglia_confidenza) & (df_test['Volatilita_Attesa'] > (costo_fee * 2.5)), 1, 0)
+            
+            df_test['Rendimento_Mercato'] = df_test['Rendimento_S&P500'].shift(-1)
+            df_test['Rendimento_Strategia'] = df_test['Segnale'] * df_test['Rendimento_Mercato']
+            
+            # Sottrazione analitica dei costi di transazione
+            df_test['Variazione_Posizione'] = df_test['Segnale'].diff().abs()
+            df_test.loc[df_test['Variazione_Posizione'] == 1, 'Rendimento_Strategia'] -= costo_fee
             
             capitale_iniziale = 10000
-            df_features['S&P 500 (Buy & Hold)'] = capitale_iniziale * (1 + df_features['Rendimento_Mercato']).cumprod()
-            df_features['Algoritmo Multivariato Netto'] = capitale_iniziale * (1 + df_features['Rendimento_Strategia']).cumprod()
+            df_test['S&P 500 (Buy & Hold)'] = capitale_iniziale * (1 + df_test['Rendimento_Mercato']).cumprod()
+            df_test['Algoritmo Multivariato Netto'] = capitale_iniziale * (1 + df_test['Rendimento_Strategia']).cumprod()
             
-            df_plot = df_features[['Algoritmo Multivariato Netto', 'S&P 500 (Buy & Hold)']].dropna()
+            df_plot = df_test[['Algoritmo Multivariato Netto', 'S&P 500 (Buy & Hold)']].dropna()
             
             rend_b_h = ((df_plot['S&P 500 (Buy & Hold)'].iloc[-1] / capitale_iniziale) - 1) * 100
             rend_ai = ((df_plot['Algoritmo Multivariato Netto'].iloc[-1] / capitale_iniziale) - 1) * 100
-            trade_totali = df_features['Variazione_Posizione'].sum() / 2
+            trade_totali = df_test['Variazione_Posizione'].sum() / 2
             
             rc1, rc2, rc3 = str.columns(3)
-            rc1.metric("Rendimento Storico Indice", f"{rend_b_h:.1f}%")
-            rc2.metric("Rendimento Netto Modello AI", f"{rend_ai:.1f}%", delta=f"{rend_ai - rend_b_h:.1f}% vs Benchmark")
+            rc1.metric("Rendimento Mercato (Periodo Test)", f"{rend_b_h:.1f}%")
+            rc2.metric("Rendimento Strategia AI (Periodo Test)", f"{rend_ai:.1f}%", delta=f"{rend_ai - rend_b_h:.1f}% vs Benchmark")
             rc3.metric("Operazioni Totali Eseguite", f"{int(trade_totali)}")
             
             str.line_chart(df_plot)
+            
+            # 5. IMPORTANZA DELLE VARIABILI (Calcolata sul set di Addestramento)
+            str.markdown("---")
+            str.subheader("📊 Analisi dell'Importanza dei Fattori (Feature Importance)")
+            importanza = pd.DataFrame({'Fattore': lista_predittori, 'Importanza': modello.feature_importances_})
+            importanza = importanza.sort_values(by='Importanza', ascending=False).set_index('Fattore')
+            str.bar_chart(importanza)
+else:
+    str.warning("Inserisci la chiave API nella barra laterale per sbloccare i predittori multivariati.")
             
             # 5. IMPORTANZA DELLE VARIABILI
             str.markdown("---")
