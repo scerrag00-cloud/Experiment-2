@@ -4,13 +4,14 @@ import requests
 import pandas as pd
 import numpy as np
 import datetime
+import io
 from transformers import pipeline
 from sklearn.ensemble import RandomForestClassifier
 
 # --- CONFIGURAZIONE PAGINA ---
 str.set_page_config(page_title="Super-Radar S&P 500 Multivariato", layout="wide")
 str.title("🧠 Radar Predittivo S&P 500 - Modello Multivariato (15 Anni)")
-str.markdown("Architettura Quantitativa Ibrida: Analisi NLP in tempo reale unita a 15 anni di dati Intermarket e Macroeconomici della Federal Reserve (FRED).")
+str.markdown("Architettura Quantitativa Ibrida: Analisi NLP in tempo reale unita a 15 anni di dati Intermarket e Macroeconomici (FRED).")
 
 # --- PANNELLO LATERALE ---
 str.sidebar.header("1. Autenticazione")
@@ -47,7 +48,7 @@ if api_key:
     if str.button("Esegui Analisi Multivariata Storica"):
         with str.spinner("Estrazione dati macroeconomici FRED e storici di mercato (15 anni)..."):
             
-            # 1. SCANSIONE NLP IN TEMPO REALE
+            # 1. SCANSIONE NLP
             col1, col2, col3, col4 = str.columns(4)
             punteggi_oggi = {}
             for i, (nome, query) in enumerate(ambiti.items()):
@@ -61,7 +62,6 @@ if api_key:
             inizio = "2011-01-01"
             fine = datetime.date.today().strftime("%Y-%m-%d")
             
-            # Download Asset Finanziari (yfinance)
             tickers = {
                 'S&P 500': '^GSPC', 'Volatilità (VIX)': '^VIX', 
                 'Tassi 10Y (TNX)': '^TNX', 'Nasdaq (IXIC)': '^IXIC',
@@ -70,23 +70,25 @@ if api_key:
             dati_yf = yf.download(list(tickers.values()), start=inizio, end=fine, progress=False)['Close']
             dati_yf = dati_yf.rename(columns={v: k for k, v in tickers.items()})
             
-            # STRATEGIA DI BACKUP ESTREMA: Scarichiamo direttamente i CSV dai server della FED senza librerie rotte
+            # BLOCCO FRED CORRETTO CON USER-AGENT E RETE DI SICUREZZA
             try:
-                url_unrate = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE"
-                url_cpi = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=CPIAUCSL"
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
                 
-                df_unrate = pd.read_csv(url_unrate, parse_dates=['DATE'], index_col='DATE')
-                df_cpi = pd.read_csv(url_cpi, parse_dates=['DATE'], index_col='DATE')
-                
+                res_unrate = requests.get("https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE", headers=headers)
+                df_unrate = pd.read_csv(io.StringIO(res_unrate.text), parse_dates=['DATE'], index_col='DATE')
                 df_unrate['UNRATE'] = pd.to_numeric(df_unrate['UNRATE'], errors='coerce')
+                
+                res_cpi = requests.get("https://fred.stlouisfed.org/graph/fredgraph.csv?id=CPIAUCSL", headers=headers)
+                df_cpi = pd.read_csv(io.StringIO(res_cpi.text), parse_dates=['DATE'], index_col='DATE')
                 df_cpi['CPIAUCSL'] = pd.to_numeric(df_cpi['CPIAUCSL'], errors='coerce')
                 
                 df_macro = df_unrate.join(df_cpi, how='outer')
             except Exception as e:
-                str.error(f"Errore download alternativo FRED: {e}")
-                df_macro = pd.DataFrame(columns=['UNRATE', 'CPIAUCSL'])
+                str.warning(f"FRED non raggiungibile. Uso valori costanti per garantire stabilità. Errore: {e}")
+                # Creiamo dati neutri per evitare il collasso dell'intera matrice
+                df_macro = pd.DataFrame({'UNRATE': 5.0, 'CPIAUCSL': 250.0}, index=dati_yf.index)
             
-            # Unione e Forward-Filling
+            # Unione Dati
             df_totale = dati_yf.join(df_macro, how='left').ffill().dropna()
             
             # Creazione Features
@@ -101,7 +103,6 @@ if api_key:
             df_features['Trend_Disoccupazione'] = df_totale['UNRATE'].diff()
             df_features['Trend_Inflazione'] = df_totale['CPIAUCSL'].pct_change(12) 
             
-            # Mappatura NLP
             df_features['Politica Monetaria'] = -df_features['Variazione_Tassi10Y']
             df_features['Dati Macroeconomici'] = df_features['Rendimento_S&P500']
             df_features['Corporate & Innovazione'] = df_features['Performance_Tech']
@@ -144,12 +145,11 @@ if api_key:
             mc1.metric("Proiezione Statistica Prossima Sessione", testo_direzione)
             mc2.metric("Confidenza dell'Insieme Alberi", f"{probabilita:.1f}%")
             
-            # 4. ENGINE DI BACKTESTING RIGOROSO (15 ANNI NETTI)
+            # 4. ENGINE DI BACKTESTING RIGOROSO
             str.markdown("---")
             str.header("📈 Validazione Storica della Strategia (Dal 2011 a Oggi)")
             
             df_features['Prob_Rialzo'] = modello.predict_proba(X)[:, 1]
-            
             df_features['Volatilita_Attesa'] = df_features['Rendimento_S&P500'].rolling(15).std().fillna(0)
             df_features['Segnale'] = np.where((df_features['Prob_Rialzo'] > soglia_confidenza) & (df_features['Volatilita_Attesa'] > (costo_fee * 2)), 1, 0)
             
