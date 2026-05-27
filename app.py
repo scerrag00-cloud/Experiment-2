@@ -10,8 +10,8 @@ from sklearn.ensemble import RandomForestClassifier
 
 # --- CONFIGURAZIONE PAGINA ---
 str.set_page_config(page_title="Super-Radar S&P 500 Multivariato", layout="wide")
-str.title("🧠 Radar Predittivo S&P 500 - Modello Multivariato (15 Anni)")
-str.markdown("Architettura Quantitativa Ibrida: Analisi NLP in tempo reale unita a 15 anni di dati Intermarket e Macroeconomici (FRED).")
+str.title("🧠 Radar Predittivo S&P 500 - Swing Trading & AI Adattiva")
+str.markdown("Architettura Ibrida: Previsione a 5 Giorni (Swing Trading) con Riadattamento Continuo (Walk-Forward).")
 
 # --- PANNELLO LATERALE ---
 str.sidebar.header("1. Autenticazione")
@@ -23,9 +23,10 @@ str.sidebar.header("Telegram Bot (Opzionale)")
 TELEGRAM_TOKEN = str.sidebar.text_input("Telegram Bot Token:", type="password")
 TELEGRAM_CHAT_ID = str.sidebar.text_input("Telegram Chat ID:", type="password")
 
-str.sidebar.header("2. Parametri di Rischio")
+str.sidebar.header("2. Parametri Operativi")
 costo_fee = str.sidebar.number_input("Commissioni + Slippage % per Trade:", min_value=0.0, max_value=0.5, value=0.05, step=0.01) / 100
-soglia_confidenza = str.sidebar.slider("Soglia Confidenza Algoritmica per Innesco:", min_value=0.51, max_value=0.65, value=0.54, step=0.01)
+soglia_confidenza = str.sidebar.slider("Soglia Confidenza AI per Ingresso:", min_value=0.51, max_value=0.65, value=0.54, step=0.01)
+orizzonte_giorni = str.sidebar.slider("Orizzonte Previsione (Giorni):", min_value=1, max_value=10, value=5, step=1)
 
 ambiti = {
     "Politica Monetaria": "(\"Federal Reserve\" OR \"interest rates\" OR \"inflation\") AND economy",
@@ -61,8 +62,8 @@ def invia_messaggio_telegram(testo):
 if api_key:
     nlp = carica_modello_nlp()
     
-    if str.button("Esegui Analisi Multivariata Storica"):
-        with str.spinner("Estrazione dati macroeconomici FRED e storici di mercato (15 anni)..."):
+    if str.button("Esegui Analisi Avanzata"):
+        with str.spinner(f"Estrazione dati storici e calcolo previsioni Swing a {orizzonte_giorni} giorni..."):
             
             # 1. SCANSIONE NLP IN TEMPO REALE
             col1, col2, col3, col4 = str.columns(4)
@@ -74,7 +75,7 @@ if api_key:
                     str.subheader(nome)
                     str.metric("Sentiment Odierno", f"{score:.2f}")
             
-            # 2. DATA ENGINEERING: RETRIEVAL 15 ANNI
+            # 2. DATA ENGINEERING
             inizio = "2011-01-01"
             fine = datetime.date.today().strftime("%Y-%m-%d")
             
@@ -86,7 +87,7 @@ if api_key:
             dati_yf = yf.download(list(tickers.values()), start=inizio, end=fine, progress=False)['Close']
             dati_yf = dati_yf.rename(columns={v: k for k, v in tickers.items()})
             
-            # BLOCCO FRED UFFICIALE TRAMITE API
+            # BLOCCO FRED UFFICIALE
             try:
                 if fred_api_key:
                     def preleva_fred(serie, chiave):
@@ -101,7 +102,7 @@ if api_key:
                     df_cpi = preleva_fred('CPIAUCSL', fred_api_key)
                     df_macro = pd.concat([df_unrate, df_cpi], axis=1)
                 else:
-                    str.warning("Inserisci la FRED API Key a sinistra per scaricare i dati macroeconomici reali.")
+                    str.warning("Nessuna FRED API Key inserita. Uso valori macroeconomici costanti per la simulazione.")
                     df_macro = pd.DataFrame({'UNRATE': 5.0, 'CPIAUCSL': 250.0}, index=dati_yf.index)
             except Exception as e:
                 str.warning(f"Errore connessione FRED. Uso valori costanti. Dettaglio: {e}")
@@ -112,10 +113,10 @@ if api_key:
             
             # Creazione Features
             df_features = pd.DataFrame(index=df_totale.index)
-            df_features['Rendimento_S&P500'] = df_totale['S&P 500'].pct_change()
+            df_features['Rendimento_S&P500_Giornaliero'] = df_totale['S&P 500'].pct_change()
             df_features['Variazione_VIX'] = df_totale['Volatilità (VIX)'].pct_change()
             df_features['Variazione_Tassi10Y'] = df_totale['Tassi 10Y (TNX)'].pct_change()
-            df_features['Performance_Tech'] = df_totale['Nasdaq (IXIC)'].pct_change() - df_features['Rendimento_S&P500']
+            df_features['Performance_Tech'] = df_totale['Nasdaq (IXIC)'].pct_change() - df_features['Rendimento_S&P500_Giornaliero']
             df_features['Rendimento_Oro'] = df_totale['Oro'].pct_change()
             df_features['Rendimento_Petrolio'] = df_totale['Petrolio'].pct_change()
             df_features['Forza_Dollaro'] = df_totale['Dollaro Index'].pct_change()
@@ -123,30 +124,99 @@ if api_key:
             df_features['Trend_Inflazione'] = df_totale['CPIAUCSL'].pct_change(12) 
             
             df_features['Politica Monetaria'] = -df_features['Variazione_Tassi10Y']
-            df_features['Dati Macroeconomici'] = df_features['Rendimento_S&P500']
+            df_features['Dati Macroeconomici'] = df_features['Rendimento_S&P500_Giornaliero']
             df_features['Corporate & Innovazione'] = df_features['Performance_Tech']
             df_features['Geopolitica & Crisi'] = -df_features['Variazione_VIX']
             
-            df_features['Target'] = (df_features['Rendimento_S&P500'].shift(-1) > 0).astype(int)
+            # --- MODIFICA 1: SWING TRADING TARGET ---
+            # Chiediamo all'AI se il mercato sarà salito tra N giorni rispetto a oggi.
+            df_features[f'Rendimento_Futuro_{orizzonte_giorni}g'] = df_totale['S&P 500'].pct_change(periods=orizzonte_giorni).shift(-orizzonte_giorni)
+            df_features['Target'] = (df_features[f'Rendimento_Futuro_{orizzonte_giorni}g'] > 0).astype(int)
+            
             df_features = df_features.dropna()
             
-            # 3. MACHINE LEARNING: TRAIN-TEST SPLIT CRONOLOGICO
             lista_predittori = ['Politica Monetaria', 'Dati Macroeconomici', 'Corporate & Innovazione', 'Geopolitica & Crisi', 
                                 'Rendimento_Oro', 'Rendimento_Petrolio', 'Forza_Dollaro', 'Trend_Disoccupazione', 'Trend_Inflazione']
             
             X = df_features[lista_predittori]
             y = df_features['Target']
             
-            # Dividiamo i dati: 80% Addestramento / 20% Test
-            indice_taglio = int(len(df_features) * 0.8)
+            # --- MODIFICA 2: WALK-FORWARD (AI ADATTIVA) ---
+            str.markdown("---")
+            str.header("📈 Validazione Avanzata: Swing Trading Adattivo (Ultimi 3 Anni)")
+            str.markdown(f"*L'Intelligenza Artificiale si è ri-addestrata mensilmente, imparando dalle crisi recenti, per prevedere cicli di {orizzonte_giorni} giorni.*")
             
-            X_train = X.iloc[:indice_taglio]
-            y_train = y.iloc[:indice_taglio]
-            X_test = X.iloc[indice_taglio:]
-            y_test = y.iloc[indice_taglio:]
+            # Impostiamo il punto di inizio test a 3 anni fa
+            indice_taglio_iniziale = int(len(df_features) * 0.8)
+            mesi_di_test = len(df_features) - indice_taglio_iniziale
+            passo_finestra = 21  # Riadattamento ogni mese lavorativo circa (21 giorni di borsa)
             
-            modello = RandomForestClassifier(n_estimators=300, max_depth=6, random_state=42)
-            modello.fit(X_train, y_train)
+            probabilita_storia = []
+            
+            # Il ciclo che ri-addestra l'AI spostandosi in avanti nel tempo
+            progresso = str.progress(0, text="Addestramento continuo della Memoria Dinamica in corso...")
+            for i in range(indice_taglio_iniziale, len(df_features), passo_finestra):
+                # Il modello vede sempre TUTTO dal 2011 fino al mese "corrente"
+                X_train = X.iloc[:i]
+                y_train = y.iloc[:i]
+                
+                # Prepara la finestra di test (il mese successivo)
+                fine_test = min(i + passo_finestra, len(df_features))
+                X_test = X.iloc[i:fine_test]
+                
+                modello_locale = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42, n_jobs=-1)
+                modello_locale.fit(X_train, y_train)
+                
+                # Prevede i giorni della finestra di test
+                prob = modello_locale.predict_proba(X_test)[:, 1]
+                probabilita_storia.extend(prob)
+                
+                # Aggiorna la barra di caricamento
+                progresso.progress(min((i - indice_taglio_iniziale) / mesi_di_test, 1.0))
+            
+            progresso.empty()
+            
+            # Creazione del DataFrame di Test finale unendo le previsioni adattive
+            df_test = df_features.iloc[indice_taglio_iniziale:indice_taglio_iniziale+len(probabilita_storia)].copy()
+            df_test['Prob_Rialzo'] = probabilita_storia
+            
+            # --- MODIFICA 3: LOGICA DI INGRESSO SWING ---
+            df_test['Volatilita_Attesa'] = df_test['Rendimento_S&P500_Giornaliero'].rolling(10).std().fillna(0)
+            
+            # Generazione del Segnale
+            df_test['Segnale_Generato'] = np.where((df_test['Prob_Rialzo'] > soglia_confidenza) & (df_test['Volatilita_Attesa'] > (costo_fee)), 1, 0)
+            
+            # Mantieni la posizione per i giorni previsti dall'orizzonte (es. 5 giorni) senza uscire e rientrare
+            df_test['Posizione_Attiva'] = df_test['Segnale_Generato'].rolling(window=orizzonte_giorni, min_periods=1).max()
+            
+            # Calcolo Rendimenti
+            df_test['Rendimento_Mercato'] = df_test['Rendimento_S&P500_Giornaliero'].shift(-1)
+            df_test['Rendimento_Strategia'] = df_test['Posizione_Attiva'] * df_test['Rendimento_Mercato']
+            
+            # Sottrazione analitica dei costi di transazione (Solo quando ENTRI o ESCI davvero dalla posizione a 5 giorni)
+            df_test['Variazione_Posizione'] = df_test['Posizione_Attiva'].diff().abs()
+            df_test.loc[df_test['Variazione_Posizione'] == 1, 'Rendimento_Strategia'] -= costo_fee
+            
+            capitale_iniziale = 10000
+            df_test['S&P 500 (Buy & Hold)'] = capitale_iniziale * (1 + df_test['Rendimento_Mercato']).cumprod()
+            df_test['AI Swing Adattivo Netto'] = capitale_iniziale * (1 + df_test['Rendimento_Strategia']).cumprod()
+            
+            df_plot = df_test[['AI Swing Adattivo Netto', 'S&P 500 (Buy & Hold)']].dropna()
+            
+            rend_b_h = ((df_plot['S&P 500 (Buy & Hold)'].iloc[-1] / capitale_iniziale) - 1) * 100
+            rend_ai = ((df_plot['AI Swing Adattivo Netto'].iloc[-1] / capitale_iniziale) - 1) * 100
+            trade_totali = df_test['Variazione_Posizione'].sum() / 2
+            
+            rc1, rc2, rc3 = str.columns(3)
+            rc1.metric("Rendimento Mercato (Test 3 Anni)", f"{rend_b_h:.1f}%")
+            rc2.metric("Rendimento Netto Strategia Swing", f"{rend_ai:.1f}%", delta=f"{rend_ai - rend_b_h:.1f}% vs Benchmark")
+            rc3.metric("Operazioni Totali Eseguite (Buy/Sell)", f"{int(trade_totali)}")
+            
+            str.line_chart(df_plot)
+            
+            # 3. PREVISIONE PER LA SETTIMANA ENTRANTE (Addestramento Finale su Tutti i Dati)
+            modello_finale = RandomForestClassifier(n_estimators=300, max_depth=6, random_state=42)
+            modello_finale.fit(X, y) # Ora studia tutto fino a IERI per prevedere DOMANI
             
             ultimo_giorno = df_features.iloc[-1]
             dati_oggi = pd.DataFrame([{
@@ -161,21 +231,21 @@ if api_key:
                 'Trend_Inflazione': ultimo_giorno['Trend_Inflazione']
             }])
             
-            previsione = modello.predict(dati_oggi)[0]
-            probabilita = modello.predict_proba(dati_oggi)[0][previsione] * 100
+            previsione = modello_finale.predict(dati_oggi)[0]
+            probabilita = modello_finale.predict_proba(dati_oggi)[0][previsione] * 100
             
-            testo_direzione = "RIALZO 📈" if previsione == 1 else "RIBASSO 📉"
+            testo_direzione = f"RIALZO tra {orizzonte_giorni} GG 📈" if previsione == 1 else f"RIBASSO tra {orizzonte_giorni} GG 📉"
             
             str.markdown("---")
-            str.header("🔮 VERDETTO DELL'INTELLIGENZA ARTIFICIALE MULTIVARIATA")
+            str.header(f"🔮 VERDETTO OPERATIVO (PROSSIMI {orizzonte_giorni} GIORNI)")
             mc1, mc2 = str.columns(2)
-            mc1.metric("Proiezione Statistica Prossima Sessione", testo_direzione)
-            mc2.metric("Confidenza dell'Insieme Alberi", f"{probabilita:.1f}%")
+            mc1.metric(f"Proiezione Direzionale (Swing {orizzonte_giorni} Giorni)", testo_direzione)
+            mc2.metric("Confidenza Aggiornata", f"{probabilita:.1f}%")
             
             # --- INVIO AUTOMATICO A TELEGRAM ---
             if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
                 messaggio_alert = (
-                    f"🤖 *Radar S&P 500 Aggiornato*\n\n"
+                    f"🤖 *Radar S&P 500 (Swing {orizzonte_giorni} Giorni)*\n\n"
                     f"Direzione Prevista: *{testo_direzione}*\n"
                     f"Confidenza Statistica: *{probabilita:.1f}%*\n\n"
                     f"Sentiment Odierno:\n"
@@ -183,48 +253,7 @@ if api_key:
                     f"• Geopolitico: {punteggi_oggi['Geopolitica & Crisi']:.2f}"
                 )
                 invia_messaggio_telegram(messaggio_alert)
-                str.success("📲 Segnale inviato con successo a Telegram!")
+                str.success("📲 Segnale Operativo inviato a Telegram!")
 
-            # 4. ENGINE DI BACKTESTING OUT-OF-SAMPLE
-            str.markdown("---")
-            str.header("📈 Validazione Reale della Strategia (Test alla cieca su ultimi 3 anni)")
-            str.markdown("*Il modello sta operando su una porzione di mercato che non ha mai visto durante l'addestramento.*")
-            
-            df_test = df_features.iloc[indice_taglio:].copy()
-            
-            df_test['Prob_Rialzo'] = modello.predict_proba(X_test)[:, 1]
-            df_test['Volatilita_Attesa'] = df_test['Rendimento_S&P500'].rolling(10).std().fillna(0)
-            
-            df_test['Segnale'] = np.where((df_test['Prob_Rialzo'] > soglia_confidenza) & (df_test['Volatilita_Attesa'] > (costo_fee * 2.5)), 1, 0)
-            
-            df_test['Rendimento_Mercato'] = df_test['Rendimento_S&P500'].shift(-1)
-            df_test['Rendimento_Strategia'] = df_test['Segnale'] * df_test['Rendimento_Mercato']
-            
-            df_test['Variazione_Posizione'] = df_test['Segnale'].diff().abs()
-            df_test.loc[df_test['Variazione_Posizione'] == 1, 'Rendimento_Strategia'] -= costo_fee
-            
-            capitale_iniziale = 10000
-            df_test['S&P 500 (Buy & Hold)'] = capitale_iniziale * (1 + df_test['Rendimento_Mercato']).cumprod()
-            df_test['Algoritmo Multivariato Netto'] = capitale_iniziale * (1 + df_test['Rendimento_Strategia']).cumprod()
-            
-            df_plot = df_test[['Algoritmo Multivariato Netto', 'S&P 500 (Buy & Hold)']].dropna()
-            
-            rend_b_h = ((df_plot['S&P 500 (Buy & Hold)'].iloc[-1] / capitale_iniziale) - 1) * 100
-            rend_ai = ((df_plot['Algoritmo Multivariato Netto'].iloc[-1] / capitale_iniziale) - 1) * 100
-            trade_totali = df_test['Variazione_Posizione'].sum() / 2
-            
-            rc1, rc2, rc3 = str.columns(3)
-            rc1.metric("Rendimento Mercato (Periodo Test)", f"{rend_b_h:.1f}%")
-            rc2.metric("Rendimento Strategia AI (Periodo Test)", f"{rend_ai:.1f}%", delta=f"{rend_ai - rend_b_h:.1f}% vs Benchmark")
-            rc3.metric("Operazioni Totali Eseguite", f"{int(trade_totali)}")
-            
-            str.line_chart(df_plot)
-            
-            # 5. IMPORTANZA DELLE VARIABILI
-            str.markdown("---")
-            str.subheader("📊 Analisi dell'Importanza dei Fattori (Feature Importance)")
-            importanza = pd.DataFrame({'Fattore': lista_predittori, 'Importanza': modello.feature_importances_})
-            importanza = importanza.sort_values(by='Importanza', ascending=False).set_index('Fattore')
-            str.bar_chart(importanza)
 else:
     str.warning("Inserisci la NewsAPI Key nella barra laterale per sbloccare il radar.")
