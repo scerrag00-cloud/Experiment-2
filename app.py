@@ -16,7 +16,12 @@ str.markdown("Architettura Quantitativa Ibrida: Analisi NLP in tempo reale unita
 # --- PANNELLO LATERALE ---
 str.sidebar.header("1. Autenticazione")
 api_key = str.sidebar.text_input("Inserisci NewsAPI Key:", type="password")
-fred_api_key = str.sidebar.text_input("Inserisci FRED API Key:", type="password")
+fred_api_key = str.sidebar.text_input("Inserisci FRED API Key (Opzionale):", type="password")
+
+# --- TELEGRAM ---
+str.sidebar.header("Telegram Bot (Opzionale)")
+TELEGRAM_TOKEN = str.sidebar.text_input("Telegram Bot Token:", type="password")
+TELEGRAM_CHAT_ID = str.sidebar.text_input("Telegram Chat ID:", type="password")
 
 str.sidebar.header("2. Parametri di Rischio")
 costo_fee = str.sidebar.number_input("Commissioni + Slippage % per Trade:", min_value=0.0, max_value=0.5, value=0.05, step=0.01) / 100
@@ -43,13 +48,23 @@ def analizza_notizie(api_key, query, nlp):
     punteggio = sum([1 if nlp(t)[0]['label'] == 'positive' else -1 if nlp(t)[0]['label'] == 'negative' else 0 for t in titoli])
     return (punteggio / len(titoli)), titoli
 
+def invia_messaggio_telegram(testo):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": testo, "parse_mode": "Markdown"}
+    try:
+        requests.post(url, json=payload)
+    except Exception as e:
+        str.error(f"Errore invio Telegram: {e}")
+
 if api_key:
     nlp = carica_modello_nlp()
     
     if str.button("Esegui Analisi Multivariata Storica"):
         with str.spinner("Estrazione dati macroeconomici FRED e storici di mercato (15 anni)..."):
             
-            # 1. SCANSIONE NLP
+            # 1. SCANSIONE NLP IN TEMPO REALE
             col1, col2, col3, col4 = str.columns(4)
             punteggi_oggi = {}
             for i, (nome, query) in enumerate(ambiti.items()):
@@ -115,8 +130,6 @@ if api_key:
             df_features['Target'] = (df_features['Rendimento_S&P500'].shift(-1) > 0).astype(int)
             df_features = df_features.dropna()
             
-            # ... (Tutto il codice precedente rimane uguale fino a df_features.dropna()) ...
-            
             # 3. MACHINE LEARNING: TRAIN-TEST SPLIT CRONOLOGICO
             lista_predittori = ['Politica Monetaria', 'Dati Macroeconomici', 'Corporate & Innovazione', 'Geopolitica & Crisi', 
                                 'Rendimento_Oro', 'Rendimento_Petrolio', 'Forza_Dollaro', 'Trend_Disoccupazione', 'Trend_Inflazione']
@@ -124,8 +137,7 @@ if api_key:
             X = df_features[lista_predittori]
             y = df_features['Target']
             
-            # --- LA CORREZIONE QUANTITATIVA ---
-            # Dividiamo i dati: 80% Addestramento (Passato remoto) / 20% Test (Passato recente/Presente)
+            # Dividiamo i dati: 80% Addestramento / 20% Test
             indice_taglio = int(len(df_features) * 0.8)
             
             X_train = X.iloc[:indice_taglio]
@@ -133,11 +145,9 @@ if api_key:
             X_test = X.iloc[indice_taglio:]
             y_test = y.iloc[indice_taglio:]
             
-            # L'algoritmo studia SOLO il passato (X_train)
             modello = RandomForestClassifier(n_estimators=300, max_depth=6, random_state=42)
             modello.fit(X_train, y_train)
             
-            # Previsione per domani basata sui dati di oggi
             ultimo_giorno = df_features.iloc[-1]
             dati_oggi = pd.DataFrame([{
                 'Politica Monetaria': punteggi_oggi['Politica Monetaria'],
@@ -162,25 +172,34 @@ if api_key:
             mc1.metric("Proiezione Statistica Prossima Sessione", testo_direzione)
             mc2.metric("Confidenza dell'Insieme Alberi", f"{probabilita:.1f}%")
             
-            # 4. ENGINE DI BACKTESTING OUT-OF-SAMPLE (SOLO DATI INVISIBILI)
+            # --- INVIO AUTOMATICO A TELEGRAM ---
+            if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+                messaggio_alert = (
+                    f"🤖 *Radar S&P 500 Aggiornato*\n\n"
+                    f"Direzione Prevista: *{testo_direzione}*\n"
+                    f"Confidenza Statistica: *{probabilita:.1f}%*\n\n"
+                    f"Sentiment Odierno:\n"
+                    f"• Monetario: {punteggi_oggi['Politica Monetaria']:.2f}\n"
+                    f"• Geopolitico: {punteggi_oggi['Geopolitica & Crisi']:.2f}"
+                )
+                invia_messaggio_telegram(messaggio_alert)
+                str.success("📲 Segnale inviato con successo a Telegram!")
+
+            # 4. ENGINE DI BACKTESTING OUT-OF-SAMPLE
             str.markdown("---")
             str.header("📈 Validazione Reale della Strategia (Test alla cieca su ultimi 3 anni)")
             str.markdown("*Il modello sta operando su una porzione di mercato che non ha mai visto durante l'addestramento.*")
             
-            # Creiamo un DataFrame dedicato solo al periodo di Test
             df_test = df_features.iloc[indice_taglio:].copy()
             
-            # Il modello prova a indovinare i dati di test
             df_test['Prob_Rialzo'] = modello.predict_proba(X_test)[:, 1]
             df_test['Volatilita_Attesa'] = df_test['Rendimento_S&P500'].rolling(10).std().fillna(0)
             
-            # Filtro di ingresso
             df_test['Segnale'] = np.where((df_test['Prob_Rialzo'] > soglia_confidenza) & (df_test['Volatilita_Attesa'] > (costo_fee * 2.5)), 1, 0)
             
             df_test['Rendimento_Mercato'] = df_test['Rendimento_S&P500'].shift(-1)
             df_test['Rendimento_Strategia'] = df_test['Segnale'] * df_test['Rendimento_Mercato']
             
-            # Sottrazione analitica dei costi di transazione
             df_test['Variazione_Posizione'] = df_test['Segnale'].diff().abs()
             df_test.loc[df_test['Variazione_Posizione'] == 1, 'Rendimento_Strategia'] -= costo_fee
             
@@ -201,15 +220,6 @@ if api_key:
             
             str.line_chart(df_plot)
             
-            # 5. IMPORTANZA DELLE VARIABILI (Calcolata sul set di Addestramento)
-            str.markdown("---")
-            str.subheader("📊 Analisi dell'Importanza dei Fattori (Feature Importance)")
-            importanza = pd.DataFrame({'Fattore': lista_predittori, 'Importanza': modello.feature_importances_})
-            importanza = importanza.sort_values(by='Importanza', ascending=False).set_index('Fattore')
-            str.bar_chart(importanza)
-else:
-    str.warning("Inserisci la chiave API nella barra laterale per sbloccare i predittori multivariati.")
-            
             # 5. IMPORTANZA DELLE VARIABILI
             str.markdown("---")
             str.subheader("📊 Analisi dell'Importanza dei Fattori (Feature Importance)")
@@ -217,4 +227,4 @@ else:
             importanza = importanza.sort_values(by='Importanza', ascending=False).set_index('Fattore')
             str.bar_chart(importanza)
 else:
-    str.warning("Inserisci la chiave API nella barra laterale per sbloccare i predittori multivariati.")
+    str.warning("Inserisci la NewsAPI Key nella barra laterale per sbloccare il radar.")
