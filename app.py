@@ -16,6 +16,7 @@ str.markdown("Architettura Quantitativa Ibrida: Analisi NLP in tempo reale unita
 # --- PANNELLO LATERALE ---
 str.sidebar.header("1. Autenticazione")
 api_key = str.sidebar.text_input("Inserisci NewsAPI Key:", type="password")
+fred_api_key = str.sidebar.text_input("Inserisci FRED API Key:", type="password")
 
 str.sidebar.header("2. Parametri di Rischio")
 costo_fee = str.sidebar.number_input("Commissioni + Slippage % per Trade:", min_value=0.0, max_value=0.5, value=0.05, step=0.01) / 100
@@ -70,22 +71,25 @@ if api_key:
             dati_yf = yf.download(list(tickers.values()), start=inizio, end=fine, progress=False)['Close']
             dati_yf = dati_yf.rename(columns={v: k for k, v in tickers.items()})
             
-            # BLOCCO FRED CORRETTO CON USER-AGENT E RETE DI SICUREZZA
+            # BLOCCO FRED UFFICIALE TRAMITE API
             try:
-                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-                
-                res_unrate = requests.get("https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE", headers=headers)
-                df_unrate = pd.read_csv(io.StringIO(res_unrate.text), parse_dates=['DATE'], index_col='DATE')
-                df_unrate['UNRATE'] = pd.to_numeric(df_unrate['UNRATE'], errors='coerce')
-                
-                res_cpi = requests.get("https://fred.stlouisfed.org/graph/fredgraph.csv?id=CPIAUCSL", headers=headers)
-                df_cpi = pd.read_csv(io.StringIO(res_cpi.text), parse_dates=['DATE'], index_col='DATE')
-                df_cpi['CPIAUCSL'] = pd.to_numeric(df_cpi['CPIAUCSL'], errors='coerce')
-                
-                df_macro = df_unrate.join(df_cpi, how='outer')
+                if fred_api_key:
+                    def preleva_fred(serie, chiave):
+                        url = f"https://api.stlouisfed.org/fred/series/observations?series_id={serie}&api_key={chiave}&file_type=json"
+                        risposta = requests.get(url).json()
+                        df = pd.DataFrame(risposta['observations'])
+                        df['date'] = pd.to_datetime(df['date'])
+                        df['value'] = pd.to_numeric(df['value'], errors='coerce')
+                        return df.set_index('date')['value'].rename(serie)
+
+                    df_unrate = preleva_fred('UNRATE', fred_api_key)
+                    df_cpi = preleva_fred('CPIAUCSL', fred_api_key)
+                    df_macro = pd.concat([df_unrate, df_cpi], axis=1)
+                else:
+                    str.warning("Inserisci la FRED API Key a sinistra per scaricare i dati macroeconomici reali.")
+                    df_macro = pd.DataFrame({'UNRATE': 5.0, 'CPIAUCSL': 250.0}, index=dati_yf.index)
             except Exception as e:
-                str.warning(f"FRED non raggiungibile. Uso valori costanti per garantire stabilità. Errore: {e}")
-                # Creiamo dati neutri per evitare il collasso dell'intera matrice
+                str.warning(f"Errore connessione FRED. Uso valori costanti. Dettaglio: {e}")
                 df_macro = pd.DataFrame({'UNRATE': 5.0, 'CPIAUCSL': 250.0}, index=dati_yf.index)
             
             # Unione Dati
