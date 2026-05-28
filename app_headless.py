@@ -61,7 +61,8 @@ inizio = "2011-01-01"
 fine = datetime.date.today().strftime("%Y-%m-%d")
 
 tickers = {'S&P 500': '^GSPC', 'Volatilità (VIX)': '^VIX', 'Tassi 10Y (TNX)': '^TNX', 'Nasdaq (IXIC)': '^IXIC', 'Oro': 'GC=F', 'Petrolio': 'CL=F', 'Dollaro Index': 'UUP'}
-# Aggiunto threads=False per evitare il blocco di yfinance
+
+# Aggiunto threads=False per evitare il blocco del database di yfinance
 dati_yf = yf.download(list(tickers.values()), start=inizio, end=fine, progress=False, threads=False)['Close']
 dati_yf = dati_yf.rename(columns={v: k for k, v in tickers.items()})
 
@@ -143,7 +144,7 @@ probabilita = modello_finale.predict_proba(dati_oggi)[0][previsione] * 100
 
 # --- LOGICA DEL SEMAFORO OPERATIVO ---
 if probabilita >= (soglia_confidenza * 100):
-    azione_consigliata = "🟢 INGRESSO CONSIGLIATO (Confidenza > 54%)"
+    azione_consigliata = "🟢 INGRESSO CONSIGLIATO (Confidenza elevata)"
 else:
     azione_consigliata = "🟡 RESTARE IN ATTESA (Segnale troppo debole)"
 
