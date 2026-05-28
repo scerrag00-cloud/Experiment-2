@@ -45,12 +45,10 @@ def invia_messaggio_telegram(testo):
     requests.post(url, json=payload)
 
 if not api_key:
-    print("ERRORE: NEWS_API_KEY mancante. Verifica i 'Secrets' su GitHub.")
+    print("ERRORE: NEWS_API_KEY mancante.")
     exit()
 
-print("Avvio Radar Notturno...")
 nlp = pipeline("sentiment-analysis", model="ProsusAI/finbert")
-
 punteggi_oggi = {}
 top_news_memoria = {} 
 
@@ -63,6 +61,7 @@ inizio = "2011-01-01"
 fine = datetime.date.today().strftime("%Y-%m-%d")
 
 tickers = {'S&P 500': '^GSPC', 'Volatilità (VIX)': '^VIX', 'Tassi 10Y (TNX)': '^TNX', 'Nasdaq (IXIC)': '^IXIC', 'Oro': 'GC=F', 'Petrolio': 'CL=F', 'Dollaro Index': 'UUP'}
+# Aggiunto threads=False per evitare il blocco di yfinance
 dati_yf = yf.download(list(tickers.values()), start=inizio, end=fine, progress=False, threads=False)['Close']
 dati_yf = dati_yf.rename(columns={v: k for k, v in tickers.items()})
 
@@ -109,6 +108,28 @@ y = df_features[f'Target_{orizzonte_giorni}g']
 modello_finale = RandomForestClassifier(n_estimators=300, max_depth=6, random_state=42)
 modello_finale.fit(X, y) 
 
+# --- NUOVA SEZIONE: VERIFICA PREVISIONE PASSATA ---
+indice_passato = -1 - orizzonte_giorni
+features_passate = X.iloc[[indice_passato]]
+
+pred_passata = modello_finale.predict(features_passate)[0]
+prob_passata = modello_finale.predict_proba(features_passate)[0][pred_passata] * 100
+
+direzione_passata = "RIALZO 📈" if pred_passata == 1 else "RIBASSO 📉"
+
+prezzo_oggi = df_totale['S&P 500'].iloc[-1]
+prezzo_passato = df_totale['S&P 500'].iloc[indice_passato]
+ritorno_reale = ((prezzo_oggi / prezzo_passato) - 1) * 100
+
+direzione_reale = "RIALZO 📈" if ritorno_reale > 0 else "RIBASSO 📉"
+
+if (pred_passata == 1 and ritorno_reale > 0) or (pred_passata == 0 and ritorno_reale <= 0):
+    esito_passato = "✅ GIUSTA"
+else:
+    esito_passato = "❌ ERRATA"
+# --------------------------------------------------
+
+# Previsione per il futuro
 ultimo = df_features.iloc[-1]
 dati_oggi = pd.DataFrame([{
     'Politica Monetaria': punteggi_oggi['Politica Monetaria'], 'Dati Macroeconomici': punteggi_oggi['Dati Macroeconomici'],
@@ -117,12 +138,10 @@ dati_oggi = pd.DataFrame([{
     'Forza_Dollaro': ultimo['Forza_Dollaro'], 'Trend_Disoccupazione': ultimo['Trend_Disoccupazione'], 'Trend_Inflazione': ultimo['Trend_Inflazione']
 }])
 
-# ... (codice precedente intatto)
-
 previsione = modello_finale.predict(dati_oggi)[0]
 probabilita = modello_finale.predict_proba(dati_oggi)[0][previsione] * 100
 
-# --- NUOVA LOGICA: CONSIGLIO OPERATIVO ---
+# --- LOGICA DEL SEMAFORO OPERATIVO ---
 if probabilita >= (soglia_confidenza * 100):
     azione_consigliata = "🟢 INGRESSO CONSIGLIATO (Confidenza > 54%)"
 else:
@@ -141,10 +160,16 @@ for cat, news_list in top_news_memoria.items():
         resoconto_news += "\n"
 
 msg = (
-    f"🤖 *Radar MSCI World (SWDA) - Chiusura*\n\n"
-    f"🎯 *Trend Operativo ({orizzonte_giorni}gg da {giorno_target}):* {testo_direzione}\n"
-    f"📊 *Confidenza AI:* {probabilita:.1f}%\n"
+    f"🤖 *Radar S&P 500 - Report Notturno*\n\n"
+    f"🔮 *NUOVA PREVISIONE:* \n"
+    f"• Trend ({orizzonte_giorni}gg da {giorno_target}): *{testo_direzione}*\n"
+    f"• Confidenza: *{probabilita:.1f}%*\n"
     f"⚠️ *Azione AI:* {azione_consigliata}\n\n"
+    f"📊 *VERIFICA PREVISIONE PRECEDENTE:* \n"
+    f"• Finestra temporale: ultimi {orizzonte_giorni} giorni di borsa\n"
+    f"• Previsione dell'AI: {direzione_passata} (con {prob_passata:.1f}% confidenza)\n"
+    f"• Movimento Reale: {direzione_reale} ({ritorno_reale:+.2f}%)\n"
+    f"• Esito: *{esito_passato}*\n\n"
     f"📰 *SINTESI NEWS DI OGGI:*\n{resoconto_news}"
     f"🌍 *Sentiment Globale:*\n"
     f"• Monetario: {punteggi_oggi['Politica Monetaria']:.2f}\n"
@@ -153,4 +178,4 @@ msg = (
 )
 
 invia_messaggio_telegram(msg)
-print("Operazione completata con successo. Messaggio inviato.")
+print("Analisi e verifica completate. Messaggio inviato.")
