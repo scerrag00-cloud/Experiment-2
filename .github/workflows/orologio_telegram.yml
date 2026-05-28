@@ -2,7 +2,7 @@ name: Radar Notturno S&P 500
 
 on:
   schedule:
-    - cron: '0 20 * * 1-5'
+    - cron: '17 22 * * 1-5'
   workflow_dispatch: # Questo ti permette di avviare il test manualmente
 
 jobs:
