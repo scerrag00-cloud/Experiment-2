@@ -63,7 +63,7 @@ inizio = "2011-01-01"
 fine = datetime.date.today().strftime("%Y-%m-%d")
 
 tickers = {'S&P 500': '^GSPC', 'Volatilità (VIX)': '^VIX', 'Tassi 10Y (TNX)': '^TNX', 'Nasdaq (IXIC)': '^IXIC', 'Oro': 'GC=F', 'Petrolio': 'CL=F', 'Dollaro Index': 'UUP'}
-dati_yf = yf.download(list(tickers.values()), start=inizio, end=fine, progress=False)['Close']
+dati_yf = yf.download(list(tickers.values()), start=inizio, end=fine, progress=False, threads=False)['Close']
 dati_yf = dati_yf.rename(columns={v: k for k, v in tickers.items()})
 
 try:
