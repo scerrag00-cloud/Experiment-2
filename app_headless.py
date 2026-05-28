@@ -117,8 +117,16 @@ dati_oggi = pd.DataFrame([{
     'Forza_Dollaro': ultimo['Forza_Dollaro'], 'Trend_Disoccupazione': ultimo['Trend_Disoccupazione'], 'Trend_Inflazione': ultimo['Trend_Inflazione']
 }])
 
+# ... (codice precedente intatto)
+
 previsione = modello_finale.predict(dati_oggi)[0]
 probabilita = modello_finale.predict_proba(dati_oggi)[0][previsione] * 100
+
+# --- NUOVA LOGICA: CONSIGLIO OPERATIVO ---
+if probabilita >= (soglia_confidenza * 100):
+    azione_consigliata = "🟢 INGRESSO CONSIGLIATO (Confidenza > 54%)"
+else:
+    azione_consigliata = "🟡 RESTARE IN ATTESA (Segnale troppo debole)"
 
 oggi_index = datetime.datetime.today().weekday()
 giorno_target = "Lunedì" if oggi_index == 4 else "Domani"
@@ -133,9 +141,10 @@ for cat, news_list in top_news_memoria.items():
         resoconto_news += "\n"
 
 msg = (
-    f"🤖 *Radar S&P 500 - Chiusura*\n\n"
+    f"🤖 *Radar MSCI World (SWDA) - Chiusura*\n\n"
     f"🎯 *Trend Operativo ({orizzonte_giorni}gg da {giorno_target}):* {testo_direzione}\n"
-    f"📊 *Confidenza AI:* {probabilita:.1f}%\n\n"
+    f"📊 *Confidenza AI:* {probabilita:.1f}%\n"
+    f"⚠️ *Azione AI:* {azione_consigliata}\n\n"
     f"📰 *SINTESI NEWS DI OGGI:*\n{resoconto_news}"
     f"🌍 *Sentiment Globale:*\n"
     f"• Monetario: {punteggi_oggi['Politica Monetaria']:.2f}\n"
